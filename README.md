@@ -16,5 +16,5 @@
     1. [ ] [Pesquisa de Audiência](./Docs/pesquisa-audiencia.md);
     2. [ ] [Requisitos](./Docs/requisitos.md);
     3. [ ] [Tabela de Casos de Uso](./Docs/tabela-casos-de-uso.md);
-    4. [ ] [MCU](./Docs/mcu.md);
+    4. [ ] [Modelo de Casos de Uso (diagrama)](./Docs/modelo-casos-de-uso.md);
     5. [ ] [UML](./Docs/uml.md);
