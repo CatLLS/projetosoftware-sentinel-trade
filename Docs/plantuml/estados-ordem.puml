@@ -1,0 +1,61 @@
+@startuml
+title SentinelTrade - Maquina de Estados da Ordem
+hide empty description
+skinparam shadowing false
+skinparam linetype ortho
+skinparam state {
+  BackgroundColor #FDFEFE
+  BorderColor #2C3E50
+  FontName Arial
+}
+
+legend right
+  Rotulo de transicao: evento [guarda] / acao
+  Estados finais: EXECUTADA, REJEITADA, CANCELADA e EXPIRADA.
+endlegend
+
+[*] --> CRIADA : criar(dados, chaveIdempotencia) / registrarTransicao()
+
+CRIADA --> VALIDADA : validar [regrasOk] / reservarSaldoOuPosicao()
+CRIADA --> REJEITADA : validar [!regrasOk] / registrarMotivo(); notificar()
+
+VALIDADA --> ENVIADA : publicarOutbox / enfileirarEnvio()
+ENVIADA --> ABERTA : aceiteDaBolsa / registrarTransicao(); notificar()
+ENVIADA --> REJEITADA : recusaDaBolsa(motivo) / liberarReserva(); notificar()
+ENVIADA --> PENDENTE_RECONCILIACAO : timeout / agendarReconciliacao(); notificarIncerteza()
+
+PENDENTE_RECONCILIACAO --> ABERTA : reconciliar [encontradaAberta] / registrarTransicao(); notificar()
+PENDENTE_RECONCILIACAO --> PARCIALMENTE_EXECUTADA : reconciliar [encontradaParcial] / registrarExecucoes(); notificar()
+PENDENTE_RECONCILIACAO --> EXECUTADA : reconciliar [encontradaExecutada] / registrarExecucoes(); notificar()
+PENDENTE_RECONCILIACAO --> REJEITADA : reconciliar [naoEncontrada] / liberarReserva(); notificar()
+
+ABERTA --> PARCIALMENTE_EXECUTADA : execucaoRecebida(qtd, preco) [qtdExecutada < quantidade] / registrarExecucao(); ajustarReserva(); notificar()
+ABERTA --> EXECUTADA : execucaoRecebida(qtd, preco) [qtdExecutada = quantidade] / registrarExecucao(); liquidar(); notificar()
+PARCIALMENTE_EXECUTADA --> PARCIALMENTE_EXECUTADA : execucaoRecebida(qtd, preco) [qtdExecutada < quantidade] / registrarExecucao(); ajustarReserva(); notificar()
+PARCIALMENTE_EXECUTADA --> EXECUTADA : execucaoRecebida(qtd, preco) [qtdExecutada = quantidade] / registrarExecucao(); liquidar(); notificar()
+
+ABERTA --> CANCELAMENTO_SOLICITADO : solicitarCancelamento / publicarCancelamento()
+PARCIALMENTE_EXECUTADA --> CANCELAMENTO_SOLICITADO : solicitarCancelamento / publicarCancelamento()
+CANCELAMENTO_SOLICITADO --> CANCELADA : cancelamentoConfirmado / liberarReservaRemanescente(); notificar()
+CANCELAMENTO_SOLICITADO --> EXECUTADA : execucaoConfirmada / registrarExecucao(); liquidar(); notificar()
+
+ABERTA --> EXPIRADA : when(validadeEncerrada) / liberarReserva(); notificar()
+
+EXECUTADA --> [*]
+REJEITADA --> [*]
+CANCELADA --> [*]
+EXPIRADA --> [*]
+
+note bottom of CRIADA
+  A mesma chave de idempotencia com o mesmo conteudo
+  devolve a ordem existente; com conteudo diferente, e rejeitada.
+end note
+note right of PENDENTE_RECONCILIACAO
+  Nao reenviar a ordem cegamente.
+  Consultar a bolsa pelo ID da ordem.
+end note
+note left of CANCELAMENTO_SOLICITADO
+  Alteracao de preco ou quantidade e tratada
+  como cancelamento + nova ordem, quando aplicavel.
+end note
+@enduml

@@ -1,0 +1,167 @@
+@startuml
+title SentinelTrade - Classes de Projeto (fluxo de ordens)
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "Interface" #EAF2F8 {
+  class OrdemController <<boundary>> {
+    +postOrdem(requisicao: CriarOrdemRequest): OrdemResponse
+    +postCancelamento(id: UUID): OrdemResponse
+  }
+  class OrdemWebSocket <<boundary>> {
+    +publicarStatus(evento: EventoOrdem)
+  }
+}
+
+package "Aplicacao" #FEF9E7 {
+  class OrdemApplicationService <<control>> {
+    +criar(cmd: CriarOrdemCommand): Ordem
+    +solicitarCancelamento(ordemId: UUID): void
+    +processarRetorno(retorno: RetornoBolsa): void
+  }
+  class ValidadorPreNegociacao <<control>> {
+    +validar(ordem: Ordem, conta: Conta): ResultadoValidacao
+  }
+  class ProcessadorOutbox <<control>> {
+    +publicarPendentes(): void
+  }
+  class ReconcilicadorOrdens <<control>> {
+    +reconciliarPendentes(): void
+  }
+  class NotificacaoApplicationService <<control>> {
+    +notificar(evento: EventoOrdem): void
+  }
+}
+
+package "Dominio" #E8F8F5 {
+  class Ordem <<entity>> {
+    -id: UUID
+    -status: StatusOrdem
+    -chaveIdempotencia: String
+    -quantidade: Quantidade
+    -quantidadeExecutada: Quantidade
+    -versao: Long
+    +validar(): void
+    +marcarEnviada(): void
+    +registrarExecucao(execucao: Execucao): void
+    +solicitarCancelamento(): void
+    -transicionarPara(destino: StatusOrdem): void
+  }
+  class Conta <<entity>> {
+    -saldoDisponivel: Dinheiro
+    -saldoBloqueado: Dinheiro
+    -versao: Long
+    +reservar(valor: Dinheiro): void
+    +liberar(valor: Dinheiro): void
+  }
+  class Posicao <<entity>> {
+    -quantidadeTotal: Quantidade
+    -quantidadeBloqueada: Quantidade
+    +reservar(quantidade: Quantidade): void
+    +liberar(quantidade: Quantidade): void
+  }
+  class Execucao <<entity>> {
+    -quantidade: Quantidade
+    -preco: Dinheiro
+    -ocorreuEm: Instant
+  }
+  class OutboxEvent <<entity>> {
+    -id: UUID
+    -agregadoId: UUID
+    -tipo: String
+    -payload: Json
+    -publicadoEm: Instant [0..1]
+  }
+  class ServicoReserva <<control>> {
+    +reservarPara(ordem: Ordem, conta: Conta): void
+    +liberarDa(ordem: Ordem, conta: Conta): void
+  }
+  enum StatusOrdem {
+    CRIADA
+    VALIDADA
+    ENVIADA
+    ABERTA
+    PENDENTE_RECONCILIACAO
+    PARCIALMENTE_EXECUTADA
+    CANCELAMENTO_SOLICITADO
+    EXECUTADA
+    REJEITADA
+    CANCELADA
+    EXPIRADA
+  }
+}
+
+package "Portas" #F4ECF7 {
+  interface OrdemRepository {
+    +porId(id: UUID): Ordem
+    +porChaveIdempotencia(chave: String): Ordem
+    +salvar(ordem: Ordem): void
+  }
+  interface ContaRepository {
+    +porIdParaAtualizacao(id: UUID): Conta
+    +salvar(conta: Conta): void
+  }
+  interface OutboxRepository {
+    +adicionar(evento: OutboxEvent): void
+    +pendentes(): List<OutboxEvent>
+  }
+  interface BolsaGateway {
+    +enviar(ordem: Ordem): void
+    +consultar(ordemId: UUID): SituacaoBolsa
+  }
+  interface EventPublisher {
+    +publicar(evento: OutboxEvent): void
+  }
+  interface Notificador {
+    +enviar(notificacao: Notificacao): void
+  }
+}
+
+package "Infraestrutura" #FDEDEC {
+  class OrdemRepositorySql <<repository>>
+  class ContaRepositorySql <<repository>>
+  class OutboxRepositorySql <<repository>>
+  class GatewayBolsaResiliente <<adapter>> {
+    -timeout: Duration
+    -circuitBreaker: CircuitBreaker
+    +enviar(ordem: Ordem): void
+  }
+  class BrokerEventos <<adapter>>
+  class PushNotificador <<adapter>>
+  class CircuitBreaker <<infrastructure>>
+  class "Bolsa Simulada" as BolsaSimulada <<external>>
+}
+
+OrdemController --> OrdemApplicationService
+OrdemApplicationService --> ValidadorPreNegociacao
+OrdemApplicationService --> ServicoReserva
+OrdemApplicationService --> OrdemRepository
+OrdemApplicationService --> ContaRepository
+OrdemApplicationService --> OutboxRepository : transacao ACID
+ProcessadorOutbox --> OutboxRepository
+ProcessadorOutbox --> EventPublisher
+ReconcilicadorOrdens --> OrdemRepository
+ReconcilicadorOrdens --> BolsaGateway
+NotificacaoApplicationService --> Notificador
+OrdemWebSocket ..> NotificacaoApplicationService : recebe EventoOrdem
+
+ValidadorPreNegociacao --> Ordem
+ValidadorPreNegociacao --> Conta
+ServicoReserva --> Ordem
+ServicoReserva --> Conta
+Ordem "1" *-- "0..*" Execucao
+Ordem --> StatusOrdem
+
+OrdemRepositorySql ..|> OrdemRepository
+ContaRepositorySql ..|> ContaRepository
+OutboxRepositorySql ..|> OutboxRepository
+GatewayBolsaResiliente ..|> BolsaGateway
+BrokerEventos ..|> EventPublisher
+PushNotificador ..|> Notificador
+GatewayBolsaResiliente --> CircuitBreaker
+GatewayBolsaResiliente --> BolsaSimulada : HTTPS / timeout
+BrokerEventos --> OrdemApplicationService : RetornoBolsa (assíncrono)
+@enduml

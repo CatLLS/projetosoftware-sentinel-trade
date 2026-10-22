@@ -1,0 +1,119 @@
+@startuml
+title SentinelTrade - Classes de Analise (BCE)
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+legend right
+  |= Estereotipo |= Papel |
+  | <<boundary>> | Canal de comunicacao com ator ou sistema externo |
+  | <<control>> | Coordena a realizacao de um caso de uso |
+  | <<entity>> | Conceito do dominio e regras persistentes |
+endlegend
+
+package "Fronteiras" #EAF2F8 {
+  class "Portal do Investidor" as Portal <<boundary>>
+  class "Canal da Mesa" as Mesa <<boundary>>
+  class "Bolsa Simulada" as Bolsa <<boundary>>
+  class "Provedor de Cotacoes" as Provedor <<boundary>>
+  class "Portal de Auditoria" as PortalAuditoria <<boundary>>
+}
+
+package "Controles" #FEF9E7 {
+  class "Controlador de Ordem" as CtrlOrdem <<control>> {
+    +coordenarEnvio()
+    +coordenarCancelamento()
+    +processarRetorno()
+  }
+  class "Controlador de Risco" as CtrlRisco <<control>> {
+    +validarPreNegociacao()
+  }
+  class "Controlador de Cotacao" as CtrlCotacao <<control>> {
+    +atualizarCotacao()
+  }
+  class "Controlador de Reconciliação" as CtrlReconciliacao <<control>> {
+    +reconciliarPendencias()
+  }
+  class "Controlador de Auditoria" as CtrlAuditoria <<control>> {
+    +consultarEventos()
+  }
+}
+
+package "Entidades" #E8F8F5 {
+  class Investidor <<entity>> {
+    +perfilVigente()
+  }
+  class Conta <<entity>> {
+    +reservar(valor: Dinheiro)
+    +liberar(valor: Dinheiro)
+  }
+  class Posicao <<entity>> {
+    +reservar(quantidade: Quantidade)
+    +aplicarExecucao()
+  }
+  class LimiteRisco <<entity>> {
+    +permite(ordem: Ordem)
+  }
+  class Ordem <<entity>> {
+    +validar()
+    +registrarExecucao()
+    +solicitarCancelamento()
+  }
+  class Execucao <<entity>>
+  class TransicaoOrdem <<entity>>
+  class Ativo <<entity>> {
+    +negociavel()
+  }
+  class Cotacao <<entity>> {
+    +estaDesatualizada()
+  }
+  class CalendarioMercado <<entity>> {
+    +aceitaOrdens()
+  }
+  class Notificacao <<entity>>
+  class TrilhaAuditoria <<entity>> {
+    +registrar()
+    +verificarIntegridade()
+  }
+  class EventoAuditoria <<entity>>
+}
+
+Portal --> CtrlOrdem : envia ordem / consulta status
+Mesa --> CtrlOrdem : registra contingencia
+Bolsa --> CtrlOrdem : aceite, execucao, recusa
+Provedor --> CtrlCotacao : publica cotacao
+PortalAuditoria --> CtrlAuditoria : consulta eventos
+
+CtrlOrdem --> CtrlRisco : solicita validacao
+CtrlOrdem --> CtrlReconciliacao : encaminha incerteza
+CtrlOrdem --> Ordem
+CtrlOrdem --> Conta
+CtrlOrdem --> Posicao
+CtrlOrdem --> Notificacao
+CtrlOrdem ..> TrilhaAuditoria : registra evento
+CtrlRisco --> Ordem
+CtrlRisco --> Conta
+CtrlRisco --> Posicao
+CtrlRisco --> LimiteRisco
+CtrlRisco --> Ativo
+CtrlRisco --> Cotacao
+CtrlRisco --> CalendarioMercado
+CtrlCotacao --> Cotacao
+CtrlCotacao --> Ativo
+CtrlReconciliacao --> Ordem
+CtrlReconciliacao --> Execucao
+CtrlAuditoria --> TrilhaAuditoria
+
+Investidor "1" -- "1" Conta : titular
+Conta "1" *-- "0..*" Posicao : carteira
+Conta "1" *-- "0..*" LimiteRisco : limites
+Conta "1" -- "0..*" Ordem : origina
+Ordem "0..*" --> "1" Ativo : ativo
+Posicao "0..*" --> "1" Ativo : refere-se a
+Ativo "1" -- "0..1" Cotacao : ultima
+Ordem "1" *-- "0..*" Execucao
+Ordem "1" *-- "1..*" TransicaoOrdem : historico
+TrilhaAuditoria "1" *-- "0..*" EventoAuditoria : {ordered}
+@enduml
