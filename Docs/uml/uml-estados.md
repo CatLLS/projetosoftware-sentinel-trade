@@ -14,7 +14,7 @@ O diagrama de estados está especificado em PlantUML: [estados-ordem.puml](./pla
 
 Ele descreve o ciclo de vida de uma instância da classe `Ordem`. Essa classe foi escolhida porque possui estados finitos conhecidos e porque as operações permitidas - validar, enviar, executar, cancelar e reconciliar - dependem diretamente de seu estado atual.
 
-![estados-ordem-diagrama](./assets/estados-ordem.svg)
+![estados-ordem-diagrama](../extra-e-refs-aula/plantuml/estados-ordem.puml)
 
 ---
 

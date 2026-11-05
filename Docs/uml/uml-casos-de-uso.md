@@ -1,16 +1,16 @@
 # Modelo de Casos de Uso (MCU) — SentinelTrade
 
-> **Base:** `pesquisaAudiencia.md` e `requisitos.md`
+> **Base:** `pesquisaAudiencia.md`(Docs/evidencias) e `requisitos.md` (Docs/requisitos)
 >
 > **Referência metodológica:** BEZERRA, Eduardo. *Princípios de Análise e Projeto de Sistemas com UML*, cap. 4 (Modelagem de casos de uso).
 >
-> **Arquivo do diagrama:** `./assets/mcu.svg`. Ele precisa estar na mesma pasta deste `.md` para a imagem aparecer.
+> **Arquivo do diagrama:** `..\extra-e-refs-aula\assets\mcu.svg`.
 
 ---
 
 ## 1. Diagrama
 
-![Diagrama de casos de uso do SentinelTrade](./assets/mcu.svg)
+![Diagrama de casos de uso do SentinelTrade](..\extra-e-refs-aula\assets\mcu.svg)
 
 O diagrama mostra **27 casos de uso** e **9 atores** (6 humanos, 2 sistemas externos e o Tempo). Os casos de uso estão organizados em três colunas dentro da fronteira do sistema:
 
@@ -41,6 +41,7 @@ Segundo Bezerra, ator é qualquer elemento **externo** ao sistema que interage c
 ---
 
 ## 3. Lista de casos de uso
+(para mais detalhes, ler Docs/uml/tabela-casos-de-uso.md)
 
 | ID | Caso de uso | Ator primário | Ator(es) secundário(s) | Requisitos |
 |---|---|---|---|---|
@@ -256,9 +257,3 @@ A numeração (UCxx) mantém a rastreabilidade com `requisitos.md`.
 Todos os 33 requisitos funcionais estão cobertos por ao menos um caso de uso ou por uma descrição.
 
 ---
-
-## 8. Próximos passos
-
-- Escrever as descrições expandidas dos demais casos de uso, no mesmo formato da seção 5.
-- Validar os fluxos de exceção do UC06 com a Orion, em especial os textos de mensagem ao usuário.
-- Usar os substantivos das descrições como ponto de partida para o modelo de classes (`uml.md`).
