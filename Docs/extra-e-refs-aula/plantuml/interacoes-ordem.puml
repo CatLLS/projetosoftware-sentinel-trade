@@ -1,0 +1,202 @@
+@startuml
+title SentinelTrade - Diagrama de Sequencia (Envio, Validacao, Transmissao e Retorno de Ordem)
+autonumber "<b>[00]"
+skinparam shadowing false
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam ParticipantPadding 12
+skinparam BoxPadding 8
+skinparam sequence {
+  ArrowColor #2C3E50
+  LifeLineBorderColor #2C3E50
+  LifeLineBackgroundColor #FDFEFE
+  ParticipantBorderColor #2C3E50
+  ParticipantBackgroundColor #FDFEFE
+  ParticipantFontName Arial
+  ActorBorderColor #2C3E50
+  ActorBackgroundColor #EAF2F8
+  GroupBorderColor #2C3E50
+  GroupBackgroundColor #F8F9F9
+  ReferenceBorderColor #2C3E50
+  ReferenceBackgroundColor #FEF9E7
+}
+
+mainframe **sd** Realizar Envio e Processamento de Ordem (UC06, UC13, UC14, UC25, UC26)
+
+actor "Investidor" as Inv
+box "Apresentacao (Fronteiras)" #EAF2F8
+  participant ":Portal do Investidor\n(OrdemController)" as Portal <<boundary>>
+  participant ":OrdemWebSocket" as WS <<boundary>>
+end box
+
+box "Aplicacao (Controles)" #FEF9E7
+  participant ":OrdemApplicationService" as AppOrdem <<control>>
+  participant ":ValidadorPreNegociacao" as CtrlRisco <<control>>
+  participant ":ProcessadorOutbox" as OutboxWorker <<control>>
+  participant ":ReconcilicadorOrdens" as CtrlReconciliacao <<control>>
+end box
+
+box "Dominio (Entidades e Servico)" #E8F8F5
+  participant ":ServicoReserva" as SrvReserva <<control>>
+  participant "conta:Conta" as Conta <<entity>>
+  participant "novaOrdem:Ordem" as Ordem <<entity>>
+  participant "evento:OutboxEvent" as Outbox <<entity>>
+end box
+
+box "Servicos Tecnicos (Portas / Infraestrutura)" #FDEDEC
+  participant ":OrdemRepository" as OrdemRepo <<repository>>
+  participant ":ContaRepository" as ContaRepo <<repository>>
+  participant ":OutboxRepository" as OutboxRepo <<repository>>
+  participant ":GatewayBolsaResiliente" as Gateway <<adapter>>
+end box
+
+actor "Bolsa Simulada" as Bolsa
+
+== 1. Evento de Sistema: Submissao da Ordem e Verificacao de Idempotencia (UC06 / RF-20) ==
+
+Inv -> Portal : enviarOrdem(dadosOrdem, chaveIdempotencia)
+activate Portal
+Portal -> AppOrdem : ordem := criar(cmd: CriarOrdemCommand)
+activate AppOrdem
+
+AppOrdem -> OrdemRepo : existente := porChaveIdempotencia(chaveIdempotencia)
+activate OrdemRepo
+OrdemRepo --> AppOrdem : existente [0..1]
+deactivate OrdemRepo
+
+alt [existente != null e mesmo conteudo] (Requisicao repetida - A3)
+  AppOrdem --> Portal : ordemExistente (status atual)
+  Portal --> Inv : exibeOrdemExistente(ordemExistente)
+else [existente == null] (Nova solicitacao)
+
+  AppOrdem -> ContaRepo : conta := porIdParaAtualizacao(contaId)
+  activate ContaRepo
+  ContaRepo --> AppOrdem : conta (versao)
+  deactivate ContaRepo
+
+  AppOrdem --> Ordem ** : <<create>> criar(dados, chaveIdempotencia)
+  activate Ordem
+  Ordem -> Ordem : registrarTransicao(CRIADA)
+  deactivate Ordem
+
+  == 2. Validacao Pre-Negociacao e Reserva Atomica (UC13 / RF-14, RF-15, RF-16) ==
+
+  AppOrdem -> CtrlRisco : resultado := validar(novaOrdem, conta)
+  activate CtrlRisco
+  ref over CtrlRisco, Conta, Ordem
+    Validar saldo/posicao, LimiteRisco, Ativo.negociavel(),
+    Cotacao.!estaDesatualizada(), CalendarioMercado.aceitaOrdens()
+    e suitability (inclui UC12 se fora do perfil)
+  end ref
+  CtrlRisco --> AppOrdem : resultado
+  deactivate CtrlRisco
+
+  alt [resultado.regrasOk == true]
+    AppOrdem -> SrvReserva : reservarPara(novaOrdem, conta)
+    activate SrvReserva
+    SrvReserva -> Conta : reservar(valorOuQuantidade)
+    activate Conta
+    Conta --> SrvReserva : ok (versao incrementada)
+    deactivate Conta
+    SrvReserva --> AppOrdem : reservaConfirmada
+    deactivate SrvReserva
+
+    AppOrdem -> Ordem : validar()
+    activate Ordem
+    Ordem -> Ordem : transicionarPara(VALIDADA)
+    deactivate Ordem
+
+    AppOrdem --> Outbox ** : <<create>> OutboxEvent(novaOrdem.id, "ORDEM_VALIDADA", payload)
+
+    note over AppOrdem, OutboxRepo
+      Transacao ACID unica (RNF-RES-04 / RNF-RES-07):
+      persiste Conta (reserva), Ordem (VALIDADA) e OutboxEvent.
+    end note
+
+    AppOrdem -> ContaRepo : salvar(conta)
+    AppOrdem -> OrdemRepo : salvar(novaOrdem)
+    AppOrdem -> OutboxRepo : adicionar(evento)
+
+    AppOrdem --> Portal : OrdemResponse(id, status = VALIDADA)
+    Portal --> Inv : confirmaRecebimento(status = VALIDADA)
+
+    == 3. Transmissao Assincrona via Outbox e Gateway da Bolsa (UC14 / RNF-RES-01..05) ==
+
+    OutboxWorker -> OutboxRepo : eventos := pendentes()
+    activate OutboxWorker
+    loop [para cada evento em eventos]
+      OutboxWorker ->> Gateway : enviar(novaOrdem)
+      activate Gateway
+      Gateway -> Ordem : marcarEnviada()
+      Gateway -> Bolsa : POST /ordens (ordemId, chaveIdempotencia, timeout=2s)
+      activate Bolsa
+
+      alt [Aceite dentro do timeout]
+        Bolsa --> Gateway : 202 Accepted (aceiteDaBolsa)
+        Gateway ->> AppOrdem : processarRetorno(ACEITE, ordemId)
+        AppOrdem -> Ordem : transicionarPara(ABERTA)
+        AppOrdem -> OrdemRepo : salvar(novaOrdem)
+        AppOrdem ->> WS : publicarStatus(ordemId, ABERTA)
+        WS ->> Inv : pushStatus(ABERTA)
+
+      else [Execucao total ou parcial (UC25)]
+        Bolsa ->> Gateway : execucaoRecebida(qtd, preco)
+        Gateway ->> AppOrdem : processarRetorno(EXECUCAO, qtd, preco)
+        AppOrdem -> Ordem : registrarExecucao(qtd, preco)
+        activate Ordem
+        Ordem -> Ordem : criarExecucao(); transicionarPara(PARCIAL ou EXECUTADA)
+        deactivate Ordem
+        AppOrdem -> Conta : liquidarOuAjustarReserva(qtd, preco)
+        AppOrdem -> OrdemRepo : salvar(novaOrdem)
+        AppOrdem ->> WS : publicarStatus(ordemId, EXECUTADA)
+        WS ->> Inv : pushStatus(EXECUTADA)
+        ref over AppOrdem, Inv : UC16 Notificar Investidor e Registrar na TrilhaAuditoria
+
+      else [Recusa da Bolsa (E1)]
+        Bolsa --> Gateway : 422 Rejected (motivo)
+        deactivate Bolsa
+        Gateway ->> AppOrdem : processarRetorno(RECUSA, motivo)
+        AppOrdem -> SrvReserva : liberarDa(novaOrdem, conta)
+        AppOrdem -> Ordem : transicionarPara(REJEITADA, motivo)
+        AppOrdem -> OrdemRepo : salvar(novaOrdem)
+        AppOrdem ->> WS : publicarStatus(ordemId, REJEITADA, motivo)
+        WS ->> Inv : pushStatus(REJEITADA, motivo)
+
+      else [Timeout sem resposta conclusiva (E2 - RF-21 / RNF-RES-02)]
+        Gateway ->> AppOrdem : sinalizarTimeout(ordemId)
+        deactivate Gateway
+        note right of Gateway
+          Proibido reenviar a ordem as cegas!
+          Encaminha para PENDENTE_RECONCILIACAO.
+        end note
+        AppOrdem -> Ordem : transicionarPara(PENDENTE_RECONCILIACAO)
+        AppOrdem -> OrdemRepo : salvar(novaOrdem)
+        AppOrdem ->> WS : publicarStatus(ordemId, PENDENTE_RECONCILIACAO)
+
+        == 4. Reconciliacao de Ordens Incertas (UC26 / RF-21) ==
+        CtrlReconciliacao -> OrdemRepo : listarPorStatus(PENDENTE_RECONCILIACAO)
+        activate CtrlReconciliacao
+        CtrlReconciliacao -> Gateway : situacao := consultar(ordemId)
+        Gateway -> Bolsa : GET /ordens/{ordemId}
+        Bolsa --> Gateway : situacaoReal (ABERTA | EXECUTADA | NAO_ENCONTRADA)
+        Gateway --> CtrlReconciliacao : situacaoReal
+        CtrlReconciliacao -> AppOrdem : aplicarReconciliacao(ordemId, situacaoReal)
+        deactivate CtrlReconciliacao
+      end
+    end
+    deactivate OutboxWorker
+
+  else [resultado.regrasOk == false] (Falha na validacao - E1)
+    AppOrdem -> Ordem : rejeitar(resultado.motivo)
+    activate Ordem
+    Ordem -> Ordem : transicionarPara(REJEITADA)
+    deactivate Ordem
+    AppOrdem -> OrdemRepo : salvar(novaOrdem)
+    AppOrdem --> Portal : OrdemResponse(id, status = REJEITADA, motivo)
+    Portal --> Inv : exibeErroAmigavel(motivo)
+  end
+end
+
+deactivate AppOrdem
+deactivate Portal
+@enduml

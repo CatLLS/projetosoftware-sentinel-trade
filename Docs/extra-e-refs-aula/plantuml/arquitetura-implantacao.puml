@@ -1,0 +1,109 @@
+@startuml
+title SentinelTrade - Diagrama de Implantacao Fisica e Alocacao de Componentes
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam componentStyle uml2
+skinparam defaultFontName Arial
+skinparam node {
+  BackgroundColor #FDFEFE
+  BorderColor #2C3E50
+  FontName Arial
+}
+skinparam component {
+  BackgroundColor #FDFEFE
+  BorderColor #2C3E50
+  FontName Arial
+}
+
+legend right
+  |= Camada Fisica (Tier - Cap. 11, Secao 11.2) |= Criterio de Alocacao (RNF) |
+  | Presentation Tier (Clientes Magros) | Interface grafica sem regra financeira local (RNF-SEG-04) |
+  | Edge / DMZ Tier | Terminacao TLS, WAF, Rate Limit e MFA (RNF-SEG-02, RNF-SEG-03, RNF-SEG-11) |
+  | Middle Tier (Cluster de Aplicacao) | 2+ replicas stateless para alta disponibilidade >= 99,9% (RNF-RES-06, RNF-RES-08) |
+  | Data & Messaging Tier | SGBD ACID + Outbox, Fila replicada e Auditoria isolada (RNF-RES-04, RNF-AUD-02) |
+endlegend
+
+package "Presentation Tier (Maquinas dos Usuarios)" #EAF2F8 {
+  node "<u>dispInvestidor : Dispositivo Movel / Desktop</u>\n<<client workstation>>" as NodeInv {
+    component "App / Web Portal do Investidor\n(Thin Client)" as CompPortal
+  }
+
+  node "<u>estacaoOrion : Estacao Interna Orion</u>\n<<client workstation>>" as NodeMesa {
+    component "Painel Mesa, Risco e Compliance\n(Thin Client)" as CompMesa
+  }
+}
+
+package "Edge Tier (Fronteira de Seguranca)" #F4ECF7 {
+  node "<u>gatewayEdge : Servidor de Borda</u>\n<<reverse proxy / WAF>>" as NodeEdge {
+    component "API Gateway & Terminador TLS" as CompEdge
+    component "Servidor WebSocket (Push Status)" as CompWS
+  }
+}
+
+package "Middle Tier (Servidores de Aplicacao e Dominio)" #FEF9E7 {
+  node "<u>clusterApp : Cluster de Aplicacao (2+ Nos Stateless)</u>\n<<application server>>" as NodeApp {
+    component "Servico de Identidade e MFA" as CompAuth
+    component "Servico de Ordens e Validacao\n(OrdemApplicationService + Dominio)" as CompOrdens
+    component "Servico de Cotacoes e Staleness" as CompCotacoes
+    component "Servico de Notificacoes" as CompNotif
+    component "Workers de Outbox e Reconciliacao\n(ProcessadorOutbox + Reconcilicador)" as CompWorkers
+    component "Gateway Bolsa Resiliente\n(Timeout 2s + CircuitBreaker)" as CompGatewayBolsa
+  }
+}
+
+package "Data & Messaging Tier (Persistencia e Filas)" #E8F8F5 {
+  node "<u>dbCluster : Servidor SGBD (Primary + Standby)</u>\n<<database server>>" as NodeDB {
+    database "PostgreSQL Transacional (ACID)\n[Contas, Posicoes, Ordens, Outbox]" as DBMain
+  }
+
+  node "<u>cacheCluster : Servidor de Cache em Memoria</u>\n<<in-memory data store>>" as NodeCache {
+    database "Redis Cluster\n[Ultimas Cotacoes (TTL 5s), Sessoes, RateLimit]" as DBCache
+  }
+
+  node "<u>brokerCluster : Cluster de Mensageria</u>\n<<message broker>>" as NodeBroker {
+    queue "Filas Duraveis Replicadas\n[ordens.envio, ordens.retorno, notificacoes]" as QueueBroker
+  }
+
+  node "<u>vaultAuditoria : Servidor de Auditoria Isolado</u>\n<<immutable storage server>>" as NodeAudit {
+    database "Armazenamento Append-Only (WORM)\n[TrilhaAuditoria Encadeada por Hash]" as DBAudit
+  }
+}
+
+package "Sistemas Externos (Ambiente)" #FDEDEC {
+  node "<u>bolsaExterna : Bolsa Simulada</u>\n<<external system>>" as NodeBolsa {
+    component "Motor de Negociacao Simulado" as CompBolsa
+  }
+
+  node "<u>provedorExterno : Provedor de Cotacoes</u>\n<<external system>>" as NodeProvedor {
+    component "Feed de Mercado em Tempo Quase Real" as CompFeed
+  }
+}
+
+' Conexoes Fisicas e Protocolos (Secao 11.2.1)
+CompPortal -- CompEdge : "<<HTTPS / TLS 1.3>>\nREST + Chave Idempotencia"
+CompPortal -- CompWS : "<<WSS / TLS 1.3>>\nStatus <= 2s"
+CompMesa -- CompEdge : "<<HTTPS / mTLS>>\nRBAC Interno"
+
+CompEdge -- CompAuth : "<<HTTP/2 Interno>>"
+CompEdge -- CompOrdens : "<<HTTP/2 Interno>>\ncorrelationId"
+CompEdge -- CompCotacoes : "<<HTTP/2 Interno>>"
+CompNotif -- CompWS : "<<Pub/Sub Interno>>"
+
+CompOrdens -- DBMain : "<<TCP/IP - JDBC/SQL>>\nTransacao ACID + Lock Otimista"
+CompWorkers -- DBMain : "<<TCP/IP - JDBC/SQL>>\nLeitura Outbox / Pendencias"
+CompCotacoes -- DBCache : "<<TCP/IP - Redis Protocol>>\nLeitura/Escrita <= 1s"
+CompOrdens -- DBCache : "<<TCP/IP - Redis Protocol>>\nConsulta Frescor Cotacao"
+
+CompWorkers -- QueueBroker : "<<AMQP / TLS>>\nPublica OutboxEvent"
+QueueBroker -- CompGatewayBolsa : "<<AMQP / TLS>>\nConsome Envio"
+QueueBroker -- CompOrdens : "<<AMQP / TLS>>\nConsome Retorno"
+QueueBroker -- CompNotif : "<<AMQP / TLS>>\nDispara Alertas"
+
+CompOrdens -- DBAudit : "<<TLS / Credencial Restrita Append-Only>>\nGrava EventoAuditoria"
+CompAuth -- DBAudit : "<<TLS / Credencial Restrita Append-Only>>\nGrava Eventos de Seguranca"
+
+CompGatewayBolsa -- CompBolsa : "<<HTTPS / mTLS>>\nTimeout=2s, ID Ordem Cliente"
+CompWorkers -- CompBolsa : "<<HTTPS / mTLS>>\nReconciliacao GET /ordens/{id}"
+CompFeed -- CompCotacoes : "<<WSS / HTTPS>>\nTimeout=1s, Stream de Precos"
+@enduml

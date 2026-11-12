@@ -1,0 +1,120 @@
+@startuml
+title SentinelTrade - Arquitetura Logica em Camadas, Subsistemas e Componentes
+top to bottom direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam componentStyle uml2
+skinparam defaultFontName Arial
+skinparam package {
+  BorderColor #2C3E50
+  FontName Arial
+}
+skinparam component {
+  BackgroundColor #FDFEFE
+  BorderColor #2C3E50
+  FontName Arial
+}
+
+legend right
+  |= Elemento (Cap. 11) |= Papel no SentinelTrade |
+  | <<layer>> Camada | Nivel de abstracao logico (Apresentacao -> Aplicacao -> Dominio -> Servicos Tecnicos) |
+  | <<subsystem>> Particao | Subsistema vertical coeso de classes/componentes de negocio |
+  | Interface / Porta | Contrato explicito que reduz acoplamento e evita dependencias ciclicas |
+  | <<Observer>> Evento | Sinalizacao de camada inferior para superior via acoplamento abstrato |
+endlegend
+
+package "Camada de Apresentacao <<layer>>" as CamadaApresentacao #EAF2F8 {
+  component "Portal do Investidor\n(Web / Mobile Thin Client)" as UIInvestidor <<subsystem>>
+  component "Painel Operacional\n(Mesa, Risco, Suporte, Admin)" as UIMesa <<subsystem>>
+  component "Portal de Compliance\n(Consulta de Auditoria)" as UIAuditoria <<subsystem>>
+  component "API Gateway & WebSocket\n(OrdemController / OrdemWebSocket)" as APIGateway <<subsystem>>
+}
+
+package "Camada de Aplicacao <<layer>>" as CamadaAplicacao #FEF9E7 {
+  component "Orquestracao de Ordens\n(OrdemApplicationService,\nProcessadorOutbox, ReconcilicadorOrdens)" as AppOrdens <<subsystem>>
+  component "Validacao Pre-Negociacao\n(ValidadorPreNegociacao)" as AppRisco <<subsystem>>
+  component "Gestao de Cotacoes\n(ControladorCotacao)" as AppCotacoes <<subsystem>>
+  component "Gestao de Identidade e Sessao\n(ControladorAcessoMFA)" as AppIdentidade <<subsystem>>
+  component "Central de Notificacoes\n(NotificacaoApplicationService)" as AppNotificacao <<subsystem>>
+  component "Consulta de Auditoria\n(ControladorAuditoria)" as AppAuditoria <<subsystem>>
+}
+
+package "Camada de Dominio (Particoes de Negocio) <<layer>>" as CamadaDominio #E8F8F5 {
+  component "Subsistema de Ordens\n(Ordem, Execucao,\nTransicaoOrdem, OutboxEvent)" as DomOrdens <<subsystem>>
+  component "Subsistema de Contas e Risco\n(Conta, Posicao, LimiteRisco,\nServicoReserva, Dinheiro)" as DomContas <<subsystem>>
+  component "Subsistema de Mercado\n(Ativo, Cotacao,\nCalendarioMercado)" as DomMercado <<subsystem>>
+  component "Subsistema de Identidade\n(Usuario, Investidor,\nFuncionario, FatorMFA, Sessao)" as DomIdentidade <<subsystem>>
+  component "Subsistema de Notificacoes\n(Notificacao,\nPreferenciaNotificacao)" as DomNotificacao <<subsystem>>
+  component "Subsistema de Auditoria\n(TrilhaAuditoria,\nEventoAuditoria)" as DomAuditoria <<subsystem>>
+}
+
+package "Portas / Contratos do Nucleo <<interfaces>>" as CamadaPortas #F4ECF7 {
+  interface "IOrdemRepository /\nIContaRepository /\nIOutboxRepository" as PortRepos
+  interface "IBolsaGateway" as PortBolsa
+  interface "ICotacaoCache" as PortCotacao
+  interface "IEventPublisher /\nIObserverOrdem" as PortEventos
+  interface "INotificador" as PortNotificador
+  interface "IAuditoriaAppendOnly" as PortAuditoria
+}
+
+package "Camada de Servicos Tecnicos (Infraestrutura) <<layer>>" as CamadaInfra #FDEDEC {
+  component "Persistencia Relacional ACID\n(OrdemRepositorySql, ContaRepositorySql,\nOutboxRepositorySql)" as InfraSql <<subsystem>>
+  component "Integracao Resiliente com Bolsa\n(GatewayBolsaResiliente,\nCircuitBreaker, Timeout)" as InfraBolsa <<subsystem>>
+  component "Cache de Baixa Latencia\n(RedisCotacaoAdapter)" as InfraCache <<subsystem>>
+  component "Mensageria e Eventos\n(BrokerEventos / Filas Duraveis)" as InfraBroker <<subsystem>>
+  component "Provedor de Push / E-mail\n(PushNotificador)" as InfraPush <<subsystem>>
+  component "Armazenamento Imutavel e Criptografia\n(AuditoriaWormAdapter, KMS / Argon2id)" as InfraSeguranca <<subsystem>>
+}
+
+' Dependencias Apresentacao -> Aplicacao
+UIInvestidor --> APIGateway : HTTPS / WSS
+UIMesa --> APIGateway : HTTPS
+UIAuditoria --> APIGateway : HTTPS
+APIGateway --> AppIdentidade : autentica MFA / RBAC
+APIGateway --> AppOrdens : comandos de ordem
+APIGateway --> AppCotacoes : leitura de cotacoes
+APIGateway --> AppAuditoria : leitura de trilha
+
+' Dependencias dentro da Aplicacao (Facade / coordenacao)
+AppOrdens --> AppRisco : solicita validacao pre-trade
+
+' Dependencias Aplicacao -> Dominio
+AppOrdens --> DomOrdens
+AppOrdens --> DomContas
+AppRisco --> DomContas
+AppRisco --> DomMercado
+AppRisco --> DomIdentidade
+AppCotacoes --> DomMercado
+AppIdentidade --> DomIdentidade
+AppNotificacao --> DomNotificacao
+AppAuditoria --> DomAuditoria
+
+' Dependencias entre Particoes do Dominio (Aciclicas: sem ciclos P1->P2->P1)
+DomOrdens --> DomContas : reserva / liquidacao
+DomOrdens --> DomMercado : referencia Ativo
+DomContas --> DomMercado : posicao por Ativo
+DomContas --> DomIdentidade : titularidade e perfil
+DomOrdens ..> DomAuditoria : registra eventos
+
+' Dependencias Aplicacao/Dominio -> Portas
+AppOrdens --> PortRepos
+AppOrdens --> PortBolsa
+AppOrdens --> PortEventos
+AppCotacoes --> PortCotacao
+AppNotificacao --> PortNotificador
+DomAuditoria --> PortAuditoria
+
+' Realizacao das Portas pelos Servicos Tecnicos (Inversao de Dependencia / Observer)
+InfraSql ..|> PortRepos
+InfraBolsa ..|> PortBolsa
+InfraCache ..|> PortCotacao
+InfraBroker ..|> PortEventos
+InfraPush ..|> PortNotificador
+InfraSeguranca ..|> PortAuditoria
+
+' Notificacao ascendente via padrao Observer (Secao 11.1.1)
+InfraBroker ..> AppOrdens : <<Observer>> RetornoBolsa
+InfraBroker ..> AppNotificacao : <<Observer>> EventoOrdem
+AppNotificacao ..> APIGateway : <<Observer>> push WebSocket
+@enduml

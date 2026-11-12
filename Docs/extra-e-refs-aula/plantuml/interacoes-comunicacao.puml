@@ -1,0 +1,87 @@
+@startuml
+allowmixing
+title SentinelTrade - Diagrama de Comunicacao (Validacao Pre-Negociacao e Reserva - UC06 / UC13)
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam object {
+  BackgroundColor #FDFEFE
+  BorderColor #2C3E50
+  FontName Arial
+}
+skinparam note {
+  BackgroundColor #FEFFDD
+  BorderColor #2C3E50
+  FontName Arial
+}
+
+legend right
+  |= Notacao (Cap. 7 - Secao 7.3) |= Significado |
+  | 1, 1.1, 1.2.1 | Expressao de sequencia com numeracao em niveis |
+  | [guarda] | Clausula de condicao (OCL / pseudocodigo) |
+  | *[i := 1..n] | Clausula de iteracao sobre multiobjeto (colecao) |
+  | v := operacao(args) | Variavel temporaria que recebe o retorno da mensagem |
+endlegend
+
+actor ":Investidor" as Inv
+
+rectangle "Fronteira" #EAF2F8 {
+  object "<u>:Portal do Investidor</u>" as Portal <<boundary>>
+}
+
+rectangle "Controles" #FEF9E7 {
+  object "<u>:Controlador de Ordem</u>" as CtrlOrdem <<control>>
+  object "<u>:Controlador de Risco</u>" as CtrlRisco <<control>>
+}
+
+rectangle "Entidades e Colecoes (Dominio)" #E8F8F5 {
+  object "<u>inv:Investidor</u>" as Investidor <<entity>>
+  object "<u>c:Conta</u>" as Conta <<entity>>
+  object "<u>p:Posicao</u>" as Posicao <<entity>>
+  object "<u>limites:LimiteRisco</u>" as Limites <<multiobject>>
+  object "<u>a:Ativo</u>" as Ativo <<entity>>
+  object "<u>cot:Cotacao</u>" as Cotacao <<entity>>
+  object "<u>cal:CalendarioMercado</u>" as Calendario <<entity>>
+  object "<u>o:Ordem</u>" as Ordem <<entity>>
+  object "<u>t:TransicaoOrdem</u>" as Transicao <<entity>>
+  object "<u>trilha:TrilhaAuditoria</u>" as Auditoria <<entity>>
+}
+
+Inv --> Portal : 1: enviarOrdem(dados, chaveIdempotencia)
+Portal --> CtrlOrdem : 1.1: resp := coordenarEnvio(dados, chaveIdempotencia)
+
+CtrlOrdem --> Ordem : 1.1.1: <<create>> o := criar(dados, chaveIdempotencia)
+Ordem --> Transicao : 1.1.1.1: <<create>> registrarTransicao(CRIADA)
+
+CtrlOrdem --> CtrlRisco : 1.1.2: ok := validarPreNegociacao(o, c, inv)
+
+CtrlRisco --> Ativo : 1.1.2.1: neg := negociavel()
+CtrlRisco --> Cotacao : 1.1.2.2: desat := estaDesatualizada()
+CtrlRisco --> Calendario : 1.1.2.3: faseOk := aceitaOrdens(o.tipo)
+CtrlRisco --> Investidor : 1.1.2.4: perfilOk := perfilCompativel(a.risco)
+CtrlRisco --> Limites : 1.1.2.5 *[para cada lim em limites]: limOk := permite(o)
+
+CtrlRisco --> Conta : 1.1.2.6 [o.lado = COMPRA]: saldoOk := possuiSaldoDisponivel(o.valorEstimado)
+CtrlRisco --> Posicao : 1.1.2.7 [o.lado = VENDA]: posOk := possuiQuantidadeDisponivel(o.quantidade)
+
+CtrlOrdem --> Conta : 1.1.3 [ok = true e o.lado = COMPRA]: reservar(o.valorEstimado)
+CtrlOrdem --> Posicao : 1.1.4 [ok = true e o.lado = VENDA]: reservar(o.quantidade)
+
+CtrlOrdem --> Ordem : 1.1.5 [ok = true]: validar()
+CtrlOrdem --> Ordem : 1.1.6 [ok = false]: rejeitar(motivo)
+Ordem --> Transicao : 1.1.5.1 / 1.1.6.1: <<create>> registrarTransicao(status)
+
+CtrlOrdem --> Auditoria : 1.1.7: registrar(eventoOrdem, correlationId)
+
+note bottom of Ordem
+  Pela regra do todo-parte (Cap. 7, Secao 7.5.3):
+  Ordem (todo) e responsavel por instanciar
+  seus objetos TransicaoOrdem e Execucao (partes).
+end note
+
+note bottom of Limites
+  Multiobjeto (Secao 7.1.5):
+  a mensagem 1.1.2.5 com '*' avalia cada
+  LimiteRisco associado a Conta do investidor.
+end note
+@enduml
