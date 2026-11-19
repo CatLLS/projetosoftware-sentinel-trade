@@ -1,0 +1,30 @@
+@startuml
+title SentinelTrade - Implantacao Docker Compose (UMLsec)
+left to right direction
+skinparam shadowing false
+
+node "Estacao do usuario" as Client {
+  component "Navegador / Swagger UI" as Browser
+}
+
+node "Host Docker" as Host {
+  node "sentinel-api\n<<container>> JRE 21, usuario nao-root\nredes frontend + backend" as Api {
+    component "Spring Boot API\n<<guarded access>> <<role-based access>>" as App
+  }
+  frame "rede backend (bridge, internal: true)\n<<secure links>>" as Back {
+    node "sentinel-db\n<<container>> MySQL 8.4" as Db {
+      database "sentineltrade\n<<critical>>\naudit_logs append-only (triggers)" as Schema
+    }
+  }
+  storage "volume sentinel-db-data" as Vol
+}
+
+Browser --> App : <<Internet>> <<encrypted>>\nHTTPS/TLS em producao\nporta 8080 publicada
+App --> Schema : <<LAN>>\nJDBC, porta 3306 NAO publicada
+Db --> Vol
+
+note bottom of Back
+  internal: true -> sem rota para fora do host.
+  Apenas sentinel-api alcanca o banco.
+end note
+@enduml

@@ -1,0 +1,57 @@
+@startuml
+title SentinelTrade - Sequencia do Fluxo Critico de Ordem (UMLsec)
+skinparam shadowing false
+autonumber
+
+actor Trader
+participant "SecurityFilterChain\n<<guarded access>>" as Sec
+participant "OrderController\n<<role-based access>>" as Ctrl
+participant "OrderService\n<<fair exchange>>" as Svc
+participant "RiskRule[]" as Rules
+participant "Account / Position\n<<critical>>" as Acc
+database "MySQL\n(orders, accounts)" as DB
+participant "AuditService\n<<audit>>" as Audit
+participant "ExchangeGateway" as Ex
+
+Trader -> Sec : POST /api/v1/orders\nBearer JWT + X-Idempotency-Key
+alt token sem MFA_VERIFIED
+  Sec -> Audit : ACCESS_DENIED
+  Sec --> Trader : 403 ProblemDetail
+end
+Sec -> Ctrl : autenticado (MFA_VERIFIED)
+Ctrl -> Ctrl : @PreAuthorize hasRole(TRADER)\n@Valid PlaceOrderRequest
+Ctrl -> Svc : place(userId, command)
+Svc -> DB : findByIdempotencyKey(key)
+alt chave ja usada
+  Svc -> Audit : ORDER_DUPLICATE_REPLAYED / BLOCKED
+  Svc --> Ctrl : ordem original (200) ou 409
+end
+
+group Transacao ACID 1 <<fair exchange>>
+  Svc -> DB : save(order) [CREATED]
+  Svc -> Audit : ORDER_CREATED
+  Svc -> Rules : check(order, context)
+  alt regra violada
+    Svc -> Audit : ORDER_REJECTED
+    Svc --> Ctrl : 422 ProblemDetail <<no down-flow>>
+  else regras ok
+    Svc -> Acc : reserve(valor ou quantidade) {integrity}
+    Svc -> Audit : ORDER_VALIDATED, ORDER_SENT
+  end
+end
+
+Svc -> Ex : submit(order)
+alt resposta recebida
+  group Transacao ACID 2
+    Svc -> Acc : settleFill / releaseRemaining
+    Svc -> Audit : ORDER_OPEN / PARTIALLY_EXECUTED / EXECUTED / REJECTED
+  end
+else timeout
+  group Transacao ACID 2
+    Svc -> Audit : ORDER_PENDING_RECONCILIATION
+  end
+  note right of Svc : Nunca reenviar.\nOrderReconciler consulta a bolsa pelo ID.
+end
+Svc --> Ctrl : Placement
+Ctrl --> Trader : 201 OrderResponse (DTO)
+@enduml

@@ -1,0 +1,52 @@
+# <<secure links>>: MySQL lives only on the internal "backend" network and never
+# publishes port 3306. Only the API is reachable from the host, via "frontend".
+services:
+  sentinel-db:
+    image: mysql:8.4
+    # Allows Flyway to create the append-only triggers on audit_logs.
+    command: ["--log-bin-trust-function-creators=1"]
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:?set DB_NAME in .env}
+      MYSQL_USER: ${DB_USER:?set DB_USER in .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+    volumes:
+      - sentinel-db-data:/var/lib/mysql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  sentinel-api:
+    build: .
+    env_file: .env
+    environment:
+      DB_HOST: sentinel-db
+      DB_PORT: 3306
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      sentinel-db:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  backend:
+    driver: bridge
+    internal: true
+  frontend:
+    driver: bridge
+
+volumes:
+  sentinel-db-data:

@@ -1,0 +1,129 @@
+@startuml
+title SentinelTrade - Classes de Implementacao (UMLsec)
+left to right direction
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "api" <<role-based access>> #EAF2F8 {
+  class OrderController <<role-based access>> {
+    +place(key, PlaceOrderRequest): OrderResponse
+    +list(status, asset, page): Page<OrderResponse>
+    +amend(id, AmendOrderRequest): OrderResponse
+    +cancel(id): OrderResponse
+  }
+  class AuthController {
+    +login(LoginRequest): TokenResponse
+    +verifyMfa(MfaRequest): TokenResponse
+  }
+  class GlobalExceptionHandler <<no down-flow>> {
+    +RFC 7807 ProblemDetail
+  }
+  class "OrderResponse (DTO)" as OrderResponse <<data security>>
+}
+
+package "application" #FEF9E7 {
+  class OrderService <<guarded access>> <<fair exchange>> {
+    +place(userId, PlaceOrderCommand): Placement
+    +amend(userId, id, price): Order
+    +cancel(userId, id): Order
+    +reconcile(id): Order
+  }
+  class OrderReconciler {
+    +reconcileLiveOrders()
+  }
+  class AuthService {
+    +login(user, password): Token
+    +verifyMfa(userId, code): Token
+  }
+  class AuditService <<audit>> {
+    +record(AuditEvent)
+  }
+}
+
+package "domain" #E8F8F5 {
+  abstract class Order <<critical>> {
+    -idempotencyKey: String {integrity}
+    -quantity: BigDecimal {integrity}
+    -executedQuantity: BigDecimal {integrity}
+    -price: BigDecimal {integrity}
+    -status: OrderStatus {integrity}
+    -version: Long
+    +validate() / markSent() / accept()
+    +registerExecution(qty)
+    +requestCancel() / confirmCancel()
+    +reject(reason) / expire()
+    -transitionTo(OrderStatus)
+  }
+  class MarketOrder
+  class LimitOrder {
+    +changeLimitPrice(price)
+  }
+  class Account <<critical>> {
+    -availableBalance: BigDecimal {integrity}
+    -reservedBalance: BigDecimal {integrity}
+    -dailyRiskLimit: BigDecimal {integrity}
+    -version: Long
+    +reserve() / release() / settlePurchase() / credit()
+  }
+  class Position <<critical>> {
+    -quantity: BigDecimal {integrity}
+    -reservedQuantity: BigDecimal {integrity}
+    +reserve() / release() / addPurchase() / removeSale()
+  }
+  class User <<critical>> {
+    -passwordHash: String {secrecy}
+    -mfaSecret: String {secrecy}
+    -role: Role
+  }
+  class AuditLog <<critical>> <<audit>> {
+    append-only
+  }
+  interface RiskRule {
+    +check(Order, RiskContext)
+  }
+  class BalanceSufficiencyRule
+  class AssetPositionRule
+  class OrderExposureLimitRule
+  interface MarketQuoteProvider
+  interface ExchangeGateway
+  interface MfaVerifier
+}
+
+package "infrastructure" #FDEDEC {
+  class SecurityConfig <<guarded access>> {
+    /api/v1/** requires MFA_VERIFIED
+  }
+  class TotpMfaVerifier
+  class SecretConverter <<data security>> {
+    AES-256-GCM at rest
+  }
+  class SimulatedMarketQuoteAdapter
+  class SimulatedExchangeAdapter
+  interface AuditLogRepository <<audit>> {
+    save() / findAll() only
+  }
+}
+
+OrderController --> OrderService
+OrderController ..> OrderResponse
+AuthController --> AuthService
+OrderService --> RiskRule
+OrderService --> ExchangeGateway
+OrderService --> MarketQuoteProvider
+OrderService ..> AuditService : AuditEvent (mesma transacao)
+OrderReconciler --> OrderService
+AuthService --> MfaVerifier
+AuditService --> AuditLogRepository
+AuditLogRepository --> AuditLog
+
+Order <|-- MarketOrder
+Order <|-- LimitOrder
+RiskRule <|.. BalanceSufficiencyRule
+RiskRule <|.. AssetPositionRule
+RiskRule <|.. OrderExposureLimitRule
+MfaVerifier <|.. TotpMfaVerifier
+MarketQuoteProvider <|.. SimulatedMarketQuoteAdapter
+ExchangeGateway <|.. SimulatedExchangeAdapter
+User ..> SecretConverter : mfaSecret
+@enduml
