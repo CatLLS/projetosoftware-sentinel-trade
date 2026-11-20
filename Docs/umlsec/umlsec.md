@@ -3,9 +3,9 @@
 > **Base:** `PLAN.md` (seção 2) e o código em `src/main/java/com/sentineltrade`.
 >
 > **Diagramas (UML-as-a-Code):**
-> - Classes: [classes-umlsec.puml](./plantuml/classes-umlsec.puml)
-> - Sequência do fluxo crítico de ordem: [sequencia-ordem-umlsec.puml](./plantuml/sequencia-ordem-umlsec.puml)
-> - Implantação: [implantacao-umlsec.puml](./plantuml/implantacao-umlsec.puml)
+> - Classes: [classes-umlsec.puml](./plantuml/classes-umlsec.puml) ([classes-umlsec.svg](./assets/classes-umlsec.svg))
+> - Sequência do fluxo crítico de ordem: [sequencia-ordem-umlsec.puml](./plantuml/sequencia-ordem-umlsec.puml) ([sequencia-ordem-umlsec.svg](./assets/sequencia-ordem-umlsec.svg))
+> - Implantação: [implantacao-umlsec.puml](./plantuml/implantacao-umlsec.puml) ([implantacao-umlsec.svg](./assets/implantacao-umlsec.svg))
 
 ---
 
@@ -23,7 +23,29 @@
 
 ---
 
-## 2. Decisões em relação aos documentos de análise
+## 2. Diagramas UMLsec
+
+### 2.1 Diagrama de Classes de Implementação (UMLsec)
+
+- Especificação PlantUML: [classes-umlsec.puml](./plantuml/classes-umlsec.puml)
+
+![Diagrama de Classes de Implementação UMLsec](./assets/classes-umlsec.svg)
+
+### 2.2 Diagrama de Sequência — Fluxo Crítico de Ordem (UMLsec)
+
+- Especificação PlantUML: [sequencia-ordem-umlsec.puml](./plantuml/sequencia-ordem-umlsec.puml)
+
+![Diagrama de Sequência do Fluxo Crítico de Ordem UMLsec](./assets/sequencia-ordem-umlsec.svg)
+
+### 2.3 Diagrama de Implantação Docker Compose (UMLsec)
+
+- Especificação PlantUML: [implantacao-umlsec.puml](./plantuml/implantacao-umlsec.puml)
+
+![Diagrama de Implantação Docker Compose UMLsec](./assets/implantacao-umlsec.svg)
+
+---
+
+## 3. Decisões em relação aos documentos de análise
 
 - **Máquina de estados:** segue os 11 estados de `uml-estados.md` (nomes em inglês no código: `CREATED`, `VALIDATED`, `SENT`, `OPEN`, `PENDING_RECONCILIATION`, `PARTIALLY_EXECUTED`, `CANCEL_REQUESTED`, `EXECUTED`, `REJECTED`, `CANCELLED`, `EXPIRED`).
 - **Bolsa e cotações simuladas** em memória (`SimulatedExchangeAdapter`, `SimulatedMarketQuoteAdapter`) atrás das portas `ExchangeGateway` e `MarketQuoteProvider`.
