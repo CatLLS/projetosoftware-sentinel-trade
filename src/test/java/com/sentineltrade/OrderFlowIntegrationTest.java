@@ -109,6 +109,14 @@ class OrderFlowIntegrationTest {
         assertThat(auditLogs.findByEntityNameAndEntityIdOrderByIdAsc("Order", id(body)))
                 .extracting(AuditLog::getNewState)
                 .containsExactly("CREATED", "VALIDATED", "SENT", "OPEN", "EXECUTED");
+
+        mvc.perform(get("/api/v1/orders/" + id(body)).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXECUTED"));
+
+        mvc.perform(get("/api/v1/orders").param("assetSymbol", "PETR4").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray());
     }
 
     @Test

@@ -40,7 +40,8 @@ class RiskRulesTest {
     @Test
     void buyAboveBalanceFails() {
         assertThatThrownBy(() -> new BalanceSufficiencyRule().check(order(OrderSide.BUY, "101", "10.00"), context(null, "0")))
-                .isInstanceOf(InsufficientBalanceException.class);
+                .isInstanceOf(InsufficientBalanceException.class)
+                .hasMessageContaining("balance");
     }
 
     @Test
@@ -58,9 +59,16 @@ class RiskRulesTest {
     }
 
     @Test
+    void assetPositionRuleIgnoresBuys() {
+        assertThatCode(() -> new AssetPositionRule().check(order(OrderSide.BUY, "100", "10.00"), context(null, "0")))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void sellWithoutPositionFails() {
         assertThatThrownBy(() -> new AssetPositionRule().check(order(OrderSide.SELL, "1", "10.00"), context(null, "0")))
-                .isInstanceOf(InsufficientPositionException.class);
+                .isInstanceOf(InsufficientPositionException.class)
+                .hasMessageContaining("position");
     }
 
     @Test
@@ -81,8 +89,11 @@ class RiskRulesTest {
     }
 
     @Test
-    void exposureAboveDailyLimitFails() {
+    void exposureAboveDailyLimitFailsForBuyAndSell() {
         assertThatThrownBy(() -> new OrderExposureLimitRule().check(order(OrderSide.BUY, "51", "10.00"), context(null, "4500")))
+                .isInstanceOf(RiskLimitExceededException.class)
+                .hasMessageContaining("risk limit");
+        assertThatThrownBy(() -> new OrderExposureLimitRule().check(order(OrderSide.SELL, "51", "10.00"), context(position("100"), "4500")))
                 .isInstanceOf(RiskLimitExceededException.class);
     }
 }

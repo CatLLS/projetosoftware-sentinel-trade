@@ -27,8 +27,45 @@ class OrderTest {
     }
 
     @Test
-    void newOrderStartsCreated() {
-        assertThat(newOrder().getStatus()).isEqualTo(OrderStatus.CREATED);
+    void newOrderStartsCreatedAndExposesMetadata() {
+        LimitOrder order = newOrder();
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CREATED);
+        assertThat(order.getType()).isEqualTo(OrderType.LIMIT);
+        assertThat(order.getIdempotencyKey()).isEqualTo("key-0001");
+        assertThat(order.getAccountId()).isEqualTo(1L);
+        assertThat(order.getAssetSymbol()).isEqualTo("PETR4");
+        assertThat(order.getSide()).isEqualTo(OrderSide.BUY);
+        assertThat(order.getQuantity()).isEqualByComparingTo("100");
+        assertThat(order.getExecutedQuantity()).isEqualByComparingTo("0");
+        assertThat(order.getRemainingQuantity()).isEqualByComparingTo("100");
+        assertThat(order.getPrice()).isEqualByComparingTo("30.00");
+        assertThat(order.getCreatedAt()).isNotNull();
+        assertThat(order.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void marketOrderReportsMarketTypeAndReferencePrice() {
+        MarketOrder order = new MarketOrder("key-mkt", 2L, "VALE3", OrderSide.SELL,
+                new BigDecimal("50"), new BigDecimal("61.20"));
+
+        assertThat(order.getType()).isEqualTo(OrderType.MARKET);
+        assertThat(order.getSide()).isEqualTo(OrderSide.SELL);
+        assertThat(order.getNotional()).isEqualByComparingTo("3060.0000");
+    }
+
+    @Test
+    void constructorRejectsNonPositiveQuantityOrPrice() {
+        assertThatThrownBy(() -> new LimitOrder("k", 1L, "PETR4", OrderSide.BUY, null, BigDecimal.TEN))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LimitOrder("k", 1L, "PETR4", OrderSide.BUY, BigDecimal.ZERO, BigDecimal.TEN))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LimitOrder("k", 1L, "PETR4", OrderSide.BUY, new BigDecimal("-1"), BigDecimal.TEN))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LimitOrder("k", 1L, "PETR4", OrderSide.BUY, HUNDRED, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LimitOrder("k", 1L, "PETR4", OrderSide.BUY, HUNDRED, new BigDecimal("-5")))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -39,7 +76,11 @@ class OrderTest {
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PARTIALLY_EXECUTED);
         assertThat(order.getRemainingQuantity()).isEqualByComparingTo("60");
 
-        order.registerExecution(new BigDecimal("60"));
+        order.registerExecution(new BigDecimal("20"));
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PARTIALLY_EXECUTED);
+        assertThat(order.getRemainingQuantity()).isEqualByComparingTo("40");
+
+        order.registerExecution(new BigDecimal("40"));
         assertThat(order.getStatus()).isEqualTo(OrderStatus.EXECUTED);
         assertThat(order.getStatus().isFinal()).isTrue();
     }
@@ -54,20 +95,47 @@ class OrderTest {
     }
 
     @Test
-    void timeoutGoesToReconciliationAndCanBeResolved() {
+    void sentOrderCanBeRejectedDirectlyByExchange() {
         LimitOrder order = newOrder();
         order.validate();
         order.markSent();
-        order.markPendingReconciliation();
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.PENDING_RECONCILIATION);
+        order.reject("Outside price band");
 
-        order.accept();
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.OPEN);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.REJECTED);
+        assertThat(order.getRejectionReason()).isEqualTo("Outside price band");
     }
 
     @Test
-    void cancellationNeedsConfirmation() {
+    void timeoutGoesToReconciliationAndCanBeResolvedToAllAllowedStates() {
+        LimitOrder toOpen = newOrder();
+        toOpen.validate();
+        toOpen.markSent();
+        toOpen.markPendingReconciliation();
+        assertThat(toOpen.getStatus()).isEqualTo(OrderStatus.PENDING_RECONCILIATION);
+        toOpen.accept();
+        assertThat(toOpen.getStatus()).isEqualTo(OrderStatus.OPEN);
+
+        LimitOrder toRejected = newOrder();
+        toRejected.validate();
+        toRejected.markSent();
+        toRejected.markPendingReconciliation();
+        toRejected.reject("Order unknown to the exchange");
+        assertThat(toRejected.getStatus()).isEqualTo(OrderStatus.REJECTED);
+
+        LimitOrder toExecuted = newOrder();
+        toExecuted.validate();
+        toExecuted.markSent();
+        toExecuted.markPendingReconciliation();
+        toExecuted.registerExecution(HUNDRED);
+        assertThat(toExecuted.getStatus()).isEqualTo(OrderStatus.EXECUTED);
+    }
+
+    @Test
+    void cancellationNeedsConfirmationFromOpenOrPartiallyExecuted() {
         LimitOrder order = openOrder();
+        order.registerExecution(new BigDecimal("25"));
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PARTIALLY_EXECUTED);
+
         order.requestCancel();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCEL_REQUESTED);
 
@@ -95,10 +163,15 @@ class OrderTest {
     }
 
     @Test
-    void openOrderCanExpire() {
-        LimitOrder order = openOrder();
-        order.expire();
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.EXPIRED);
+    void openAndPartiallyExecutedOrdersCanExpire() {
+        LimitOrder open = openOrder();
+        open.expire();
+        assertThat(open.getStatus()).isEqualTo(OrderStatus.EXPIRED);
+
+        LimitOrder partial = openOrder();
+        partial.registerExecution(new BigDecimal("10"));
+        partial.expire();
+        assertThat(partial.getStatus()).isEqualTo(OrderStatus.EXPIRED);
     }
 
     @Test
@@ -119,7 +192,8 @@ class OrderTest {
         order.registerExecution(HUNDRED);
 
         List<Consumer<Order>> transitions = List.of(Order::validate, Order::markSent, Order::accept,
-                Order::requestCancel, Order::confirmCancel, Order::expire, o -> o.reject("x"));
+                Order::markPendingReconciliation, Order::requestCancel, Order::confirmCancel,
+                Order::expire, o -> o.reject("x"));
         transitions.forEach(transition -> assertThatThrownBy(() -> transition.accept(order))
                 .isInstanceOf(InvalidOrderStateException.class));
     }
@@ -134,15 +208,28 @@ class OrderTest {
     }
 
     @Test
-    void cannotExecuteMoreThanTheRemainingQuantity() {
+    void cannotExecuteZeroNegativeOrMoreThanRemainingQuantity() {
         LimitOrder order = openOrder();
+        assertThatThrownBy(() -> order.registerExecution(BigDecimal.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> order.registerExecution(new BigDecimal("-1")))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> order.registerExecution(new BigDecimal("101")))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void limitPriceCanOnlyChangeWhileOpenAndUntouched() {
+    void limitPriceCanOnlyChangeWhileOpenAndUntouchedWithPositivePrice() {
+        LimitOrder created = newOrder();
+        assertThatThrownBy(() -> created.changeLimitPrice(new BigDecimal("31.00")))
+                .isInstanceOf(InvalidOrderStateException.class);
+
         LimitOrder order = openOrder();
+        assertThatThrownBy(() -> order.changeLimitPrice(null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> order.changeLimitPrice(BigDecimal.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+
         order.changeLimitPrice(new BigDecimal("31.00"));
         assertThat(order.getPrice()).isEqualByComparingTo("31.00");
 

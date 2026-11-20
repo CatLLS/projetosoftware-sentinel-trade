@@ -1,6 +1,7 @@
 package com.sentineltrade.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -24,6 +25,13 @@ class TotpMfaVerifierTest {
     }
 
     @Test
+    void defaultConstructorUsesSystemClockAndVerifiesCurrentCode() {
+        TotpMfaVerifier verifier = new TotpMfaVerifier();
+        String code = TotpMfaVerifier.generate(RFC_SECRET, Instant.now());
+        assertThat(verifier.verify(RFC_SECRET, code)).isTrue();
+    }
+
+    @Test
     void acceptsOneStepOfClockDrift() {
         String code = TotpMfaVerifier.generate(RFC_SECRET, Instant.ofEpochSecond(1_000_000));
         assertThat(verifierAt(1_000_000 + 30).verify(RFC_SECRET, code)).isTrue();
@@ -37,10 +45,13 @@ class TotpMfaVerifierTest {
     }
 
     @Test
-    void rejectsMalformedCodes() {
+    void rejectsMalformedCodesAndInvalidBase32Secrets() {
         TotpMfaVerifier verifier = verifierAt(59);
         assertThat(verifier.verify(RFC_SECRET, null)).isFalse();
         assertThat(verifier.verify(RFC_SECRET, "28708")).isFalse();
         assertThat(verifier.verify(RFC_SECRET, "abcdef")).isFalse();
+        assertThatThrownBy(() -> verifier.verify("INVALID!BASE32@", "123456"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid base32 secret");
     }
 }
